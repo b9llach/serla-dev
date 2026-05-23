@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+# Distribution name on PyPI. The importable package is still `serla`
+# (`from serla import Serla`) - PyPI's "name confusion" check forced a
+# distinct distribution name.
+name = "serla-py"
+version = "0.1.0"
+description = "Official Python SDK for Serla analytics"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Serla" },
+]
+keywords = [
+    "analytics",
+    "events",
+    "tracking",
+    "serla",
+    "metrics",
+    "python",
+    "server",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.urls]
+Homepage = "https://serla.dev"
+Documentation = "https://serla.dev/docs"
+Repository = "https://github.com/b9llach/serla2"
+Issues = "https://github.com/b9llach/serla2/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/serla"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/serla",
+    "README.md",
+    "pyproject.toml",
+]

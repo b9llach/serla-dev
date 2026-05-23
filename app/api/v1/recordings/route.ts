@@ -1,0 +1,167 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { gzipSync } from 'zlib';
+import { db, sessionRecordings, sessionRecordingChunks, users } from '@/lib/db';
+import { validateApiKey } from '@/lib/api/auth';
+import { canAccess } from '@/components/dashboard/feature-gate';
+import { rateLimit, rateLimits, rateLimitResponse } from '@/lib/api/rate-limit';
+import { z } from 'zod';
+import { and, eq, isNull, sql } from 'drizzle-orm';
+
+export const runtime = 'nodejs';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Idempotency-Key',
+};
+
+// Each event has a `timestamp` field; we just need enough shape to pull
+// per-chunk start/end times. The full event body is opaque to the server.
+const rrwebEventSchema = z.object({
+  timestamp: z.number(),
+}).passthrough();
+
+const chunkSchema = z.object({
+  sessionId: z.string().min(1).max(200),
+  distinctId: z.string().max(200).optional().nullable(),
+  chunkIndex: z.number().int().min(0),
+  events: z.array(rrwebEventSchema).min(1).max(1000),
+  // Optional context for the first chunk so we can populate session_recording columns.
+  startUrl: z.string().max(2048).optional().nullable(),
+  browser: z.string().max(100).optional().nullable(),
+  os: z.string().max(100).optional().nullable(),
+  deviceType: z.string().max(20).optional().nullable(),
+  hasError: z.boolean().optional(),
+});
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: corsHeaders });
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const authHeader = request.headers.get('authorization');
+    const { valid, project } = await validateApiKey(authHeader);
+    if (!valid || !project) {
+      return NextResponse.json(
+        { error: 'Invalid API key' },
+        { status: 401, headers: corsHeaders },
+      );
+    }
+
+    // Plan gating: project owner's plan must include sessionReplay.
+    const owner = await db.query.users.findFirst({
+      where: and(eq(users.id, project.userId), isNull(users.deletedAt)),
+      columns: { plan: true },
+    });
+    if (!owner || !canAccess('sessionReplay', owner.plan)) {
+      return NextResponse.json(
+        { error: 'Session replay requires the Hobby plan or above' },
+        { status: 402, headers: corsHeaders },
+      );
+    }
+
+    const rateLimitResult = await rateLimit(`recordings:${project.id}`, rateLimits.events);
+    if (!rateLimitResult.success) {
+      return rateLimitResponse(rateLimitResult);
+    }
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json(
+        { error: 'Invalid JSON' },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+
+    const parsed = chunkSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: 'Invalid chunk', details: parsed.error.issues },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const chunk = parsed.data;
+
+    const rawJson = JSON.stringify(chunk.events);
+    const uncompressedSize = Buffer.byteLength(rawJson, 'utf-8');
+    // Hard cap to keep one row reasonable. The SDK should flush before this.
+    if (uncompressedSize > 2_000_000) {
+      return NextResponse.json(
+        { error: 'Chunk too large (>2MB uncompressed)' },
+        { status: 413, headers: corsHeaders },
+      );
+    }
+    const compressed = gzipSync(rawJson);
+
+    const startTime = Math.min(...chunk.events.map(e => Number(e.timestamp)));
+    const endTime = Math.max(...chunk.events.map(e => Number(e.timestamp)));
+
+    // Upsert the recording row. ON CONFLICT keeps the original started_at and
+    // accumulates totals.
+    const recordingInsert = await db
+      .insert(sessionRecordings)
+      .values({
+        projectId: project.id,
+        sessionId: chunk.sessionId,
+        distinctId: chunk.distinctId ?? undefined,
+        startedAt: new Date(startTime),
+        endedAt: new Date(endTime),
+        durationMs: endTime - startTime,
+        sizeBytes: uncompressedSize,
+        eventCount: chunk.events.length,
+        startUrl: chunk.startUrl ?? undefined,
+        browser: chunk.browser ?? undefined,
+        os: chunk.os ?? undefined,
+        deviceType: chunk.deviceType ?? undefined,
+        hasErrors: chunk.hasError ?? false,
+      })
+      .onConflictDoUpdate({
+        target: [sessionRecordings.projectId, sessionRecordings.sessionId],
+        set: {
+          endedAt: new Date(endTime),
+          durationMs: sql`GREATEST(${sessionRecordings.durationMs}, ${endTime} - EXTRACT(EPOCH FROM ${sessionRecordings.startedAt}) * 1000)::integer`,
+          sizeBytes: sql`${sessionRecordings.sizeBytes} + ${uncompressedSize}`,
+          eventCount: sql`${sessionRecordings.eventCount} + ${chunk.events.length}`,
+          hasErrors: sql`${sessionRecordings.hasErrors} OR ${chunk.hasError ?? false}`,
+        },
+      })
+      .returning({ id: sessionRecordings.id });
+
+    const recordingId = recordingInsert[0]?.id;
+    if (!recordingId) {
+      return NextResponse.json(
+        { error: 'Failed to upsert recording' },
+        { status: 500, headers: corsHeaders },
+      );
+    }
+
+    // Insert the chunk. Duplicate (recording_id, chunk_index) is a no-op so
+    // retries from the SDK don't double-store.
+    await db
+      .insert(sessionRecordingChunks)
+      .values({
+        recordingId,
+        chunkIndex: chunk.chunkIndex,
+        data: compressed,
+        uncompressedSize,
+        startTime,
+        endTime,
+        eventsCount: chunk.events.length,
+      })
+      .onConflictDoNothing();
+
+    return NextResponse.json(
+      { success: true, recordingId },
+      { status: 200, headers: corsHeaders },
+    );
+  } catch (error) {
+    console.error('[recordings] Ingestion error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500, headers: corsHeaders },
+    );
+  }
+}

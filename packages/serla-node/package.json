@@ -1,0 +1,48 @@
+{
+  "name": "serla-node",
+  "version": "0.1.0",
+  "description": "Official Node.js server SDK for Serla analytics",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "prepare": "tsup"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "analytics",
+    "events",
+    "tracking",
+    "serla",
+    "metrics",
+    "node",
+    "server"
+  ],
+  "devDependencies": {
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0"
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  }
+}

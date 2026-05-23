@@ -1,0 +1,87 @@
+'use client';
+
+import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import { Project } from '@/lib/db/schema';
+import { RealtimeProvider } from '@/lib/contexts/realtime-context';
+
+interface DashboardContextType {
+  projects: Project[];
+  currentProjectId: string | null;
+  setCurrentProjectId: (id: string) => void;
+  currentProject: Project | null;
+  realtimeToastsEnabled: boolean;
+  setRealtimeToastsEnabled: (enabled: boolean) => void;
+}
+
+const DashboardContext = createContext<DashboardContextType | null>(null);
+
+export function useDashboard() {
+  const context = useContext(DashboardContext);
+  if (!context) {
+    throw new Error('useDashboard must be used within a DashboardProvider');
+  }
+  return context;
+}
+
+interface DashboardProviderProps {
+  children: ReactNode;
+  initialProjects: Project[];
+  initialProjectId?: string;
+}
+
+export function DashboardProvider({
+  children,
+  initialProjects,
+  initialProjectId,
+}: DashboardProviderProps) {
+  const [projects, setProjects] = useState<Project[]>(initialProjects);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(
+    initialProjectId || null
+  );
+
+  // Sync state when server re-renders with new props (e.g. after project switch or creation)
+  const prevProjectId = useRef(initialProjectId);
+  const prevProjectsLen = useRef(initialProjects.length);
+  useEffect(() => {
+    if (initialProjectId !== prevProjectId.current || initialProjects.length !== prevProjectsLen.current) {
+      setCurrentProjectId(initialProjectId || null);
+      setProjects(initialProjects);
+      prevProjectId.current = initialProjectId;
+      prevProjectsLen.current = initialProjects.length;
+    }
+  }, [initialProjectId, initialProjects]);
+  const [realtimeToastsEnabled, setRealtimeToastsEnabled] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('serla:realtime-toasts');
+      return stored === 'true';
+    }
+    return false;
+  });
+
+  // Save toast preference to localStorage and broadcast to global component
+  const handleSetRealtimeToasts = (enabled: boolean) => {
+    setRealtimeToastsEnabled(enabled);
+    localStorage.setItem('serla:realtime-toasts', String(enabled));
+    // Dispatch custom event for global realtime component
+    window.dispatchEvent(new CustomEvent('serla:realtime-toggle', { detail: enabled }));
+  };
+
+  const currentProject = projects.find(p => p.id === currentProjectId) || null;
+
+  return (
+    <DashboardContext.Provider
+      value={{
+        projects,
+        currentProjectId,
+        setCurrentProjectId,
+        currentProject,
+        realtimeToastsEnabled,
+        setRealtimeToastsEnabled: handleSetRealtimeToasts,
+      }}
+    >
+      <RealtimeProvider>
+        {children}
+      </RealtimeProvider>
+    </DashboardContext.Provider>
+  );
+}
