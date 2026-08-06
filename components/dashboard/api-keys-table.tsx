@@ -120,6 +120,23 @@ function ApiKeyRow({ apiKey, canEdit }: { apiKey: ApiKey; canEdit: boolean }) {
           ) : (
             <>
               <span className="font-medium truncate">{apiKey.name}</span>
+              {apiKey.scope === 'public' ? (
+                <Badge
+                  variant="outline"
+                  className="text-green-400 border-green-500/40 text-[10px]"
+                  title="Write-only: can send events and read flags. Safe in browser code."
+                >
+                  Public
+                </Badge>
+              ) : (
+                <Badge
+                  variant="outline"
+                  className="text-amber-400 border-amber-500/40 text-[10px]"
+                  title="Full access including data export. Server-side only."
+                >
+                  Secret
+                </Badge>
+              )}
               {isRevoked ? (
                 <Badge variant="outline" className="text-zinc-500 border-zinc-700 text-[10px]">
                   Revoked

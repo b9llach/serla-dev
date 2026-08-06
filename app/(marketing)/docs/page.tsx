@@ -64,16 +64,28 @@ serla.track('page_view', { page: '/home' });
 
 All API requests authenticate with a per-project API key. A single project can have many keys (e.g. one per environment or per app) so you can rotate without coordinating across services.
 
-### API Key Format
+### Key Types
 
-All keys are prefixed \`sk_live_\` followed by a random suffix. The full key is shown **once** when you create or regenerate it. After that the dashboard only displays the prefix (e.g. \`sk_live_dvRtNibY...\`).
+Serla has two kinds of key. Pick based on **where the code runs**, not what it does.
+
+| Type | Prefix | Can do | Use it in |
+|------|--------|--------|-----------|
+| **Public** | \`pk_live_\` | Send events, identify users, record sessions, read feature flags | Browsers, mobile apps, anywhere the code is visible |
+| **Secret** | \`sk_live_\` | Everything above **plus data export** | Servers only |
+
+The distinction matters because a browser key is readable by anyone who views source. A **public** key can only write data in and resolve flags — it cannot read your event history back out. A **secret** key can call \`/api/v1/export\`, so shipping one to a browser would let any visitor download your project's raw events.
+
+If you are adding Serla to a website or mobile app, use a **public** key.
+
+The full key is shown **once** when you create it. After that the dashboard only displays the prefix (e.g. \`pk_live_dvRtNibY...\`).
 
 ### Creating an API Key
 
 1. Dashboard > Settings > API Keys (scoped to whichever project is selected in the sidebar).
-2. Click **Create API key**, give it a name (e.g. \`Production server\`, \`Local dev\`, \`Mobile app\`).
-3. Copy the full key from the dialog. **It will not be shown again.**
-4. Paste it into your SDK config or environment variable.
+2. Click **Create API key**, give it a name (e.g. \`Web app\`, \`Production server\`, \`Local dev\`).
+3. Choose **Public** for client-side code or **Secret** for server-side code.
+4. Copy the full key from the dialog. **It will not be shown again.**
+5. Paste it into your SDK config or environment variable.
 
 You can create multiple keys per project. Each has an independent revocation status and last-used timestamp, so you can see at a glance which keys are still alive and revoke unused ones safely.
 
@@ -95,9 +107,10 @@ Click **Revoke** next to any key in Dashboard > Settings > API Keys. Revocation 
 
 ### Security Best Practices
 
+- Use a \`pk_live_\` public key in anything a user can view source on. It cannot export data, so a leak costs you nothing but junk events.
+- Keep \`sk_live_\` secret keys server-side. Anyone holding one can export your project's raw event history.
 - Issue separate keys per environment (staging vs prod). Revoking a leaked staging key shouldn't take down production.
 - Never commit keys to source control. Use environment variables and a secret manager.
-- The browser SDK uses a public-ish API key by design — events from the public web are expected. Don't put admin-grade or read-API keys in browsers; the ingest key is the only kind a browser should see.
 - Rotate at a regular cadence: create a new key, deploy it, wait until \`last_used_at\` on the old key is stale, revoke.
 - A revoked key never re-activates. To restore service you must create a new one.
 
@@ -1685,15 +1698,39 @@ serla.track('page_view', properties={'page': '/home'})`,
                   All API requests authenticate with a per-project API key. A single project can have many keys (e.g. one per environment or per app) so you can rotate without coordinating across services.
                 </p>
 
-                <h3 className="text-white font-medium mb-3">API Key Format</h3>
+                <h3 className="text-white font-medium mb-3">Key Types</h3>
+                <p className="text-zinc-400 text-sm mb-4">
+                  Pick based on <strong className="text-zinc-200">where the code runs</strong>, not what it does.
+                </p>
+                <div className="space-y-3 mb-6">
+                  <div className="rounded-xl border border-green-500/25 bg-green-500/5 p-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <code className="text-green-400 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">pk_live_</code>
+                      <span className="text-white font-medium text-sm">Public</span>
+                    </div>
+                    <p className="text-zinc-400 text-sm">
+                      Send events, identify users, record sessions, read feature flags. <strong className="text-zinc-200">Cannot export data.</strong> Safe in browsers and mobile apps where anyone can view the source.
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <code className="text-amber-400 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">sk_live_</code>
+                      <span className="text-white font-medium text-sm">Secret</span>
+                    </div>
+                    <p className="text-zinc-400 text-sm">
+                      Everything a public key can do, <strong className="text-zinc-200">plus data export</strong>. Server-side only — anyone holding one can download your project&apos;s raw event history.
+                    </p>
+                  </div>
+                </div>
                 <p className="text-zinc-400 text-sm mb-6">
-                  All keys are prefixed <code className="text-green-400 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">sk_live_</code> followed by a random suffix. The full key is shown <strong className="text-white">once</strong> at creation. After that, the dashboard only displays the prefix.
+                  The full key is shown <strong className="text-white">once</strong> at creation. After that, the dashboard only displays the prefix.
                 </p>
 
                 <h3 className="text-white font-medium mb-3">Creating a Key</h3>
                 <ol className="space-y-2 text-zinc-400 text-sm list-decimal list-inside mb-6">
                   <li>Dashboard → Settings → API Keys (scoped to whichever project is selected in the sidebar).</li>
-                  <li>Click <strong className="text-zinc-300">Create API key</strong>, give it a name (e.g. <code className="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">Production server</code>, <code className="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">Local dev</code>).</li>
+                  <li>Click <strong className="text-zinc-300">Create API key</strong> and give it a name (e.g. <code className="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">Web app</code>, <code className="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">Production server</code>).</li>
+                  <li>Choose <strong className="text-zinc-300">Public</strong> for client-side code or <strong className="text-zinc-300">Secret</strong> for server-side code.</li>
                   <li>Copy the full key from the dialog. <strong className="text-white">It will not be shown again.</strong></li>
                   <li>Paste it into your SDK config or environment variable.</li>
                 </ol>
@@ -1729,9 +1766,10 @@ serla.track('page_view', properties={'page': '/home'})`,
 
                 <h3 className="text-white font-medium mb-3 mt-8">Security Best Practices</h3>
                 <ul className="space-y-2 text-zinc-400 text-sm list-disc list-inside">
+                  <li>Use a <code className="text-green-400 bg-zinc-800 px-1 rounded text-xs">pk_live_</code> public key in anything a user can view source on. It cannot export data, so a leak costs you nothing but junk events.</li>
+                  <li>Keep <code className="text-amber-400 bg-zinc-800 px-1 rounded text-xs">sk_live_</code> secret keys server-side. Anyone holding one can export your raw event history.</li>
                   <li>Issue separate keys per environment. Revoking a leaked staging key shouldn&apos;t take down production.</li>
                   <li>Never commit keys to source control. Use environment variables and a secret manager.</li>
-                  <li>The browser SDK uses a public-ish ingest key by design — events from the public web are expected. Don&apos;t expose admin-grade keys in browsers.</li>
                   <li>Rotate at a regular cadence: create a new key, deploy it, wait until <code className="text-zinc-300 bg-zinc-800 px-1 rounded text-xs">last_used_at</code> on the old key is stale, revoke.</li>
                   <li>A revoked key never re-activates. To restore service you must create a new one.</li>
                 </ul>

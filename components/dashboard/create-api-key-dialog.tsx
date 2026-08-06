@@ -23,10 +23,13 @@ interface Props {
   projectId: string;
 }
 
+type Scope = 'secret' | 'public';
+
 export function CreateApiKeyDialog({ projectId }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
+  const [scope, setScope] = useState<Scope>('secret');
   const [createdKey, setCreatedKey] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -34,7 +37,7 @@ export function CreateApiKeyDialog({ projectId }: Props) {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     startTransition(async () => {
-      const result = await createApiKey(projectId, name);
+      const result = await createApiKey(projectId, name, scope);
       if (result.success && result.key) {
         setCreatedKey(result.key);
         router.refresh();
@@ -55,6 +58,7 @@ export function CreateApiKeyDialog({ projectId }: Props) {
     setOpen(false);
     setCreatedKey(null);
     setName('');
+    setScope('secret');
     setCopied(false);
   };
 
@@ -65,6 +69,7 @@ export function CreateApiKeyDialog({ projectId }: Props) {
     if (!next) {
       setCreatedKey(null);
       setName('');
+      setScope('secret');
       setCopied(false);
     }
     setOpen(next);
@@ -99,7 +104,18 @@ export function CreateApiKeyDialog({ projectId }: Props) {
               <Alert>
                 <AlertTriangle className="h-4 w-4" />
                 <AlertDescription>
-                  Save this somewhere safe. If you lose it, revoke this key and create a new one.
+                  {createdKey.startsWith('pk_live_') ? (
+                    <>
+                      This is a public key — safe to embed in browser or mobile code. It can send
+                      events and read flags, but cannot export data.
+                    </>
+                  ) : (
+                    <>
+                      This is a secret key — keep it server-side only. Anyone with it can export
+                      this project&apos;s raw event data. Save it somewhere safe; if you lose it,
+                      revoke and create a new one.
+                    </>
+                  )}
                 </AlertDescription>
               </Alert>
             </div>
@@ -127,6 +143,47 @@ export function CreateApiKeyDialog({ projectId }: Props) {
                   required
                   maxLength={100}
                 />
+              </div>
+
+              <div className="space-y-2 py-2">
+                <Label>Key type</Label>
+                <div className="grid gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setScope('secret')}
+                    className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                      scope === 'secret'
+                        ? 'border-zinc-600 bg-zinc-800/50'
+                        : 'border-zinc-800 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <code className="text-xs font-mono text-amber-400">sk_live_</code>
+                      <span className="text-sm font-medium text-zinc-200">Secret</span>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      Full access, including data export. Server-side only — never ship this to a browser.
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setScope('public')}
+                    className={`text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                      scope === 'public'
+                        ? 'border-zinc-600 bg-zinc-800/50'
+                        : 'border-zinc-800 hover:border-zinc-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <code className="text-xs font-mono text-green-400">pk_live_</code>
+                      <span className="text-sm font-medium text-zinc-200">Public</span>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-1">
+                      Send events and read feature flags only. Cannot export data, so it&apos;s safe in browser and mobile bundles.
+                    </p>
+                  </button>
+                </div>
               </div>
               <DialogFooter className="mt-4">
                 <Button type="button" variant="outline" onClick={() => setOpen(false)} disabled={pending}>

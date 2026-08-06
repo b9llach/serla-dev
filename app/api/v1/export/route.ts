@@ -21,9 +21,27 @@ const exportSchema = z.object({
 
 export async function GET(request: NextRequest) {
   try {
-    // Validate API key
+    // Export reads raw event data back out, so it requires a SECRET key.
+    // Public (pk_live_) keys are designed to be embedded in browser bundles
+    // where any visitor can read them - if they were accepted here, anyone
+    // could scrape a customer's entire event history straight from their
+    // site's JavaScript.
     const authHeader = request.headers.get('authorization');
-    const { valid, project } = await validateApiKey(authHeader);
+    const { valid, project, insufficientScope } = await validateApiKey(authHeader, {
+      requiredScope: 'secret',
+    });
+
+    if (insufficientScope) {
+      return NextResponse.json(
+        {
+          error: 'This endpoint requires a secret key',
+          message:
+            'Public keys (pk_live_...) cannot read data. Create a secret key ' +
+            'in Settings > API Keys and use it only from a server.',
+        },
+        { status: 403 }
+      );
+    }
 
     if (!valid || !project) {
       return NextResponse.json(

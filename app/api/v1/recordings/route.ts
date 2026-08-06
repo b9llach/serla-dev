@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { gzipSync } from 'zlib';
 import { db, sessionRecordings, sessionRecordingChunks, users } from '@/lib/db';
 import { validateApiKey } from '@/lib/api/auth';
-import { canAccess } from '@/components/dashboard/feature-gate';
+import { canAccess } from '@/lib/plans/features';
 import { rateLimit, rateLimits, rateLimitResponse } from '@/lib/api/rate-limit';
 import { z } from 'zod';
 import { and, eq, isNull, sql } from 'drizzle-orm';

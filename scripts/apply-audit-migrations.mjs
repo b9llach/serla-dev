@@ -332,6 +332,14 @@ const statements = [
   // Make legacy columns nullable so new projects can be created keyless.
   `ALTER TABLE projects ALTER COLUMN api_key_hash DROP NOT NULL`,
   `ALTER TABLE projects ALTER COLUMN api_key_prefix DROP NOT NULL`,
+
+  // ===== API key scopes =====
+  // 'secret' keys (sk_live_) keep full access including data export.
+  // 'public' keys (pk_live_) are write-only ingest + flag resolution, safe to
+  // ship in a browser bundle. Existing keys default to 'secret' so nothing
+  // that works today stops working.
+  `ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'secret'`,
+  `CREATE INDEX IF NOT EXISTS api_keys_scope_idx ON api_keys (scope)`,
 ];
 
 for (const stmt of statements) {

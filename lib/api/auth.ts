@@ -10,12 +10,32 @@ export async function hashApiKey(apiKey: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export function generateApiKey(): { key: string; hash: Promise<string>; prefix: string } {
+/**
+ * API key scopes.
+ *
+ * - `secret` (sk_live_...) grants everything, including reading raw event
+ *   data back out via /api/v1/export. Server-side only.
+ * - `public` (pk_live_...) is write-only ingest plus feature-flag
+ *   resolution. Safe to embed in a browser or mobile bundle, where any
+ *   visitor can read it out of the source.
+ *
+ * The prefix is part of the key itself so a leaked key is identifiable at a
+ * glance (and greppable in secret scanners).
+ */
+export type ApiKeyScope = 'secret' | 'public';
+
+export function generateApiKey(
+  scope: ApiKeyScope = 'secret'
+): { key: string; hash: Promise<string>; prefix: string; scope: ApiKeyScope } {
   const randomBytes = crypto.getRandomValues(new Uint8Array(32));
-  const key = 'sk_live_' + btoa(String.fromCharCode(...randomBytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  const suffix = btoa(String.fromCharCode(...randomBytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+  const key = (scope === 'public' ? 'pk_live_' : 'sk_live_') + suffix;
   const hash = hashApiKey(key);
   const prefix = key.substring(0, 16);
-  return { key, hash, prefix };
+  return { key, hash, prefix, scope };
 }
 
 interface ValidateResult {
@@ -24,9 +44,26 @@ interface ValidateResult {
   user?: typeof users.$inferSelect;
   withinLimits?: boolean;
   limitError?: string;
+  /** Scope of the key that authenticated this request. */
+  scope?: ApiKeyScope;
+  /** True when the key was valid but lacks the scope the endpoint requires. */
+  insufficientScope?: boolean;
 }
 
-export async function validateApiKey(authHeader: string | null): Promise<ValidateResult> {
+/**
+ * Validate an `Authorization: Bearer <key>` header.
+ *
+ * Pass `requiredScope: 'secret'` on endpoints that read data back out.
+ * Public (pk_live_) keys are rejected there because they are designed to be
+ * embedded in client bundles where anyone can read them - a public key must
+ * never be able to export another user's raw events.
+ *
+ * Ingest endpoints omit the option and accept both scopes.
+ */
+export async function validateApiKey(
+  authHeader: string | null,
+  options: { requiredScope?: ApiKeyScope } = {}
+): Promise<ValidateResult> {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return { valid: false };
   }
@@ -40,10 +77,17 @@ export async function validateApiKey(authHeader: string | null): Promise<Validat
   // table-alias return shape, which was returning column subsets on neon-http.
   const apiKeyRow = await db.query.apiKeys.findFirst({
     where: and(eq(apiKeys.keyHash, hash), isNull(apiKeys.revokedAt)),
-    columns: { id: true, projectId: true },
+    columns: { id: true, projectId: true, scope: true },
   });
   if (!apiKeyRow) {
     return { valid: false };
+  }
+
+  const scope = (apiKeyRow.scope as ApiKeyScope) ?? 'secret';
+  // Only 'secret' satisfies a 'secret' requirement. There is no hierarchy
+  // beyond that today, so an explicit equality check is the whole rule.
+  if (options.requiredScope === 'secret' && scope !== 'secret') {
+    return { valid: false, insufficientScope: true, scope };
   }
 
   const project = await db.query.projects.findFirst({
@@ -69,12 +113,15 @@ export async function validateApiKey(authHeader: string | null): Promise<Validat
       console.error('[auth] failed to bump last_used_at', err);
     });
 
-  return { valid: true, project };
+  return { valid: true, project, scope };
 }
 
 // Extended validation that includes usage limit checking
-export async function validateApiKeyWithLimits(authHeader: string | null): Promise<ValidateResult> {
-  const basicResult = await validateApiKey(authHeader);
+export async function validateApiKeyWithLimits(
+  authHeader: string | null,
+  options: { requiredScope?: ApiKeyScope } = {}
+): Promise<ValidateResult> {
+  const basicResult = await validateApiKey(authHeader, options);
 
   if (!basicResult.valid || !basicResult.project) {
     return basicResult;

@@ -451,6 +451,12 @@ export const apiKeys = pgTable('api_keys', {
   name: text('name').notNull(),
   keyHash: text('key_hash').notNull(),
   keyPrefix: text('key_prefix').notNull(),
+  // 'secret' (sk_live_...) - full access, server-side only. Can read data
+  //     back out via /api/v1/export.
+  // 'public' (pk_live_...) - write-only ingest + flag resolution. Safe to
+  //     embed in browser/mobile bundles where anyone can read it.
+  // Defaults to 'secret' so existing keys keep their current behaviour.
+  scope: text('scope').default('secret').notNull(),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at').defaultNow().notNull(),
   // Populated by the auth path on successful validate. Light writes only -

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, llmGenerations, users } from '@/lib/db';
 import { validateApiKey } from '@/lib/api/auth';
-import { canAccess } from '@/components/dashboard/feature-gate';
+import { canAccess } from '@/lib/plans/features';
 import { rateLimit, rateLimits, rateLimitResponse } from '@/lib/api/rate-limit';
 import { computeCost } from '@/lib/llm/pricing';
 import { z } from 'zod';

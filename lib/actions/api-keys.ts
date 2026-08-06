@@ -3,7 +3,7 @@
 import { db, apiKeys } from '@/lib/db';
 import { getSession } from '@/lib/auth/session';
 import { requireRole } from '@/lib/utils/project';
-import { generateApiKey } from '@/lib/api/auth';
+import { generateApiKey, type ApiKeyScope } from '@/lib/api/auth';
 import { logAudit } from '@/lib/utils/audit-log';
 import { revalidatePath } from 'next/cache';
 import { and, eq } from 'drizzle-orm';
@@ -15,7 +15,8 @@ import { and, eq } from 'drizzle-orm';
 export async function createApiKey(
   projectId: string,
   name: string,
-): Promise<{ success: boolean; key?: string; prefix?: string; error?: string }> {
+  scope: ApiKeyScope = 'secret',
+): Promise<{ success: boolean; key?: string; prefix?: string; scope?: ApiKeyScope; error?: string }> {
   const session = await getSession();
   if (!session) return { success: false, error: 'Unauthorized' };
 
@@ -27,8 +28,11 @@ export async function createApiKey(
   if (trimmed.length > 100) {
     return { success: false, error: 'Key name must be 100 characters or fewer' };
   }
+  // Never trust a client-supplied scope string - anything unrecognized
+  // falls back to the more restrictive option rather than the powerful one.
+  const resolvedScope: ApiKeyScope = scope === 'public' ? 'public' : 'secret';
 
-  const { key, hash, prefix } = generateApiKey();
+  const { key, hash, prefix } = generateApiKey(resolvedScope);
   const keyHash = await hash;
 
   await db.insert(apiKeys).values({
@@ -36,6 +40,7 @@ export async function createApiKey(
     name: trimmed,
     keyHash,
     keyPrefix: prefix,
+    scope: resolvedScope,
     createdBy: session.userId,
   });
 
@@ -44,11 +49,11 @@ export async function createApiKey(
     actorId: session.userId,
     action: 'api_key.created',
     targetType: 'api_key',
-    metadata: { name: trimmed, keyPrefix: prefix },
+    metadata: { name: trimmed, keyPrefix: prefix, scope: resolvedScope },
   });
 
   revalidatePath('/dashboard/settings/api-keys');
-  return { success: true, key, prefix };
+  return { success: true, key, prefix, scope: resolvedScope };
 }
 
 /**
