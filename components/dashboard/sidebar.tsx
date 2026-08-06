@@ -135,18 +135,27 @@ export function Sidebar({ userPlan = 'free', userRole = 'user', userName, userEm
     return initial;
   });
 
-  // Hydrate from localStorage on mount and write back on change.
+  // Hydrate saved open/closed state from localStorage after mount.
+  //
+  // This deliberately runs in an effect rather than in the useState
+  // initializer: the sidebar is server-rendered, and reading localStorage
+  // during render would produce different markup on the server (no storage)
+  // than on the client, causing a hydration mismatch. Paying one extra
+  // client render is the correct trade here, so the setState-in-effect
+  // warning is suppressed rather than "fixed".
   useEffect(() => {
     try {
       const stored = localStorage.getItem(OPEN_STATE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored) as Record<string, boolean>;
+        // Route-derived state wins over stored state so the active group is
+        // never collapsed on arrival.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setOpenGroups(prev => ({ ...parsed, ...prev }));
       }
     } catch {
-      // localStorage unavailable - silently fall back to defaults.
+      // localStorage unavailable (private mode, SSR) - keep defaults.
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const toggleGroup = (id: string) => {

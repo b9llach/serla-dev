@@ -23,7 +23,9 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "prepare": "tsup"
+    "prepare": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=18"
@@ -39,7 +41,8 @@
   ],
   "devDependencies": {
     "tsup": "^8.3.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   },
   "sideEffects": false,
   "publishConfig": {

@@ -46,6 +46,7 @@ next-env.d.ts
 /_playground
 
 # Python build artifacts inside the SDK package
+packages/*/dist/
 packages/serla-python/dist/
 packages/serla-python/build/
 packages/serla-python/*.egg-info/

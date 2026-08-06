@@ -1,6 +1,6 @@
 {
   "name": "serla-js-react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Official React bindings for the Serla analytics JS SDK",
   "license": "MIT",
   "main": "./dist/index.js",
@@ -36,7 +36,7 @@
   ],
   "peerDependencies": {
     "react": ">=18",
-    "serla-js": "^0.2.0"
+    "serla-js": ">=0.3.0 <1.0.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",

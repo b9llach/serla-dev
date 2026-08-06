@@ -1,8 +1,25 @@
-import { useContext } from 'react';
+import { useContext, useEffect } from 'react';
 import { Serla } from 'serla-js';
 import { SerlaContext } from './context';
 
 let warnedNoProvider = false;
+
+/**
+ * Dev-only, fires at most once per page load. Kept outside the hook body so
+ * we never reassign module scope from inside a component render - the React
+ * Compiler rejects that, and it would be unsafe under concurrent rendering.
+ */
+function warnMissingProviderOnce(): void {
+  if (warnedNoProvider || process.env.NODE_ENV === 'production') return;
+  warnedNoProvider = true;
+  if (typeof console !== 'undefined') {
+    console.warn(
+      '[serla-js-react] useSerla() called outside <SerlaProvider>. ' +
+        'Serla.init() was never called - tracking will no-op. ' +
+        'Wrap your tree in <SerlaProvider config={{ apiKey: "..." }}>.'
+    );
+  }
+}
 
 /**
  * Returns the Serla singleton. Works without a provider, but warns once in
@@ -11,15 +28,8 @@ let warnedNoProvider = false;
  */
 export function useSerla(): typeof Serla {
   const hasProvider = useContext(SerlaContext);
-  if (!hasProvider && !warnedNoProvider && process.env.NODE_ENV !== 'production') {
-    warnedNoProvider = true;
-    if (typeof console !== 'undefined') {
-      console.warn(
-        '[serla-js-react] useSerla() called outside <SerlaProvider>. ' +
-          'Serla.init() was never called - tracking will no-op. ' +
-          'Wrap your tree in <SerlaProvider config={{ apiKey: "..." }}>.'
-      );
-    }
-  }
+  useEffect(() => {
+    if (!hasProvider) warnMissingProviderOnce();
+  }, [hasProvider]);
   return Serla;
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition, ReactNode, useEffect } from 'react';
+import { useState, useTransition, ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -44,14 +44,23 @@ export function FlagDialog({ projectId, flag, children }: Props) {
     : [];
   const [variants, setVariants] = useState<Variant[]>(initialVariants);
 
-  // Re-sync state when reopening on a different flag.
-  useEffect(() => {
-    if (open && flag) {
+  // Re-sync form state whenever the dialog transitions closed -> open, so
+  // reopening on a different flag doesn't show the previous flag's values.
+  // Done in the open handler rather than an effect: it's a response to a
+  // user event, so there's no need to render once with stale values first.
+  const openDialog = () => {
+    if (flag) {
       setEnabled(flag.enabled);
       setRolloutPercentage(flag.rolloutPercentage);
       setVariants(Array.isArray(flag.variants) ? (flag.variants as Variant[]) : []);
     }
-  }, [open, flag]);
+    setOpen(true);
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    if (next) openDialog();
+    else setOpen(false);
+  };
 
   const addVariant = () => {
     setVariants(prev => [...prev, { key: `variant_${prev.length + 1}`, weight: 0 }]);
@@ -101,7 +110,7 @@ export function FlagDialog({ projectId, flag, children }: Props) {
   const totalVariantWeight = variants.reduce((s, v) => s + Number(v.weight || 0), 0);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>{children}</DialogTrigger>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>

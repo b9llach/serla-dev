@@ -5,7 +5,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireRole } from '@/lib/utils/project';
 import { logAudit } from '@/lib/utils/audit-log';
 import { revalidatePath } from 'next/cache';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 interface VariantInput {
   key: string;
@@ -32,7 +32,12 @@ function parseVariants(raw: string | undefined | null): VariantInput[] {
       .filter((v: unknown): v is VariantInput => {
         return !!v && typeof v === 'object' && 'key' in v && 'weight' in v;
       })
-      .map(v => ({ key: String(v.key), weight: Number(v.weight) }));
+      .map(v => ({ key: String(v.key), weight: Number(v.weight) }))
+      // Drop non-finite or negative weights here rather than letting them
+      // through. A NaN weight would otherwise defeat the sum-to-100 check
+      // below (every NaN comparison is false), get stored as JSON null, and
+      // silently route 100% of traffic to the last variant.
+      .filter(v => Number.isFinite(v.weight) && v.weight >= 0 && v.key.length > 0);
   } catch {
     return [];
   }
@@ -90,11 +95,13 @@ export async function createFlag(formData: FormData): Promise<{ success: boolean
     }
   }
 
-  // Uniqueness check.
+  // Uniqueness check, scoped to this project. Keys are only unique per
+  // project, so querying by key alone could return another tenant's row and
+  // let this check pass, turning a clear error into a unique-index violation.
   const existing = await db.query.featureFlags.findFirst({
-    where: eq(featureFlags.key, key),
+    where: and(eq(featureFlags.projectId, projectId), eq(featureFlags.key, key)),
   });
-  if (existing && existing.projectId === projectId) {
+  if (existing) {
     return { success: false, error: 'A flag with that key already exists' };
   }
 
@@ -151,14 +158,25 @@ export async function updateFlag(
   const enabled = formData.get('enabled') === 'on';
   const rolloutPercentageRaw = Number(formData.get('rolloutPercentage') ?? existing.rolloutPercentage);
   const rolloutPercentage = Math.max(0, Math.min(100, Math.round(rolloutPercentageRaw)));
-  const variants = parseVariants(formData.get('variants') as string | null);
-  const conditions = parseConditions(formData.get('conditions') as string | null);
+  // Treat an absent field as "leave unchanged" rather than "set to empty".
+  // The dashboard dialog does not yet expose a conditions editor, so without
+  // this guard every UI edit (even just flipping the toggle) would silently
+  // wipe targeting rules set via the API.
+  const variants = formData.has('variants')
+    ? parseVariants(formData.get('variants') as string | null)
+    : ((existing.variants as VariantInput[]) ?? []);
+  const conditions = formData.has('conditions')
+    ? parseConditions(formData.get('conditions') as string | null)
+    : ((existing.conditions as ConditionInput[]) ?? []);
 
   if (!name) return { success: false, error: 'Name is required' };
   if (variants.length > 0) {
     const totalWeight = variants.reduce((s, v) => s + v.weight, 0);
     if (Math.abs(totalWeight - 100) > 0.01) {
       return { success: false, error: 'Variant weights must sum to 100' };
+    }
+    if (new Set(variants.map(v => v.key)).size !== variants.length) {
+      return { success: false, error: 'Variant keys must be unique' };
     }
   }
 

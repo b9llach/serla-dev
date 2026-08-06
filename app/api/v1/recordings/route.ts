@@ -96,11 +96,31 @@ export async function POST(request: NextRequest) {
     }
     const compressed = gzipSync(rawJson);
 
-    const startTime = Math.min(...chunk.events.map(e => Number(e.timestamp)));
-    const endTime = Math.max(...chunk.events.map(e => Number(e.timestamp)));
+    const rawStart = Math.min(...chunk.events.map(e => Number(e.timestamp)));
+    const rawEnd = Math.max(...chunk.events.map(e => Number(e.timestamp)));
+    // Clamp client-supplied epoch-ms into a sane window. Unbounded values
+    // produce Invalid Date (RangeError on insert) and overflow the integer
+    // duration column, both of which surface as a 500 from a public endpoint.
+    const MAX_EPOCH_MS = 8.64e15;
+    if (
+      !Number.isFinite(rawStart) ||
+      !Number.isFinite(rawEnd) ||
+      Math.abs(rawStart) > MAX_EPOCH_MS ||
+      Math.abs(rawEnd) > MAX_EPOCH_MS
+    ) {
+      return NextResponse.json(
+        { error: 'Invalid event timestamps' },
+        { status: 400, headers: corsHeaders },
+      );
+    }
+    const startTime = rawStart;
+    const endTime = rawEnd;
+    // duration_ms is an integer column - cap at its ceiling (~24.8 days).
+    const durationMs = Math.max(0, Math.min(endTime - startTime, 2_147_483_647));
 
-    // Upsert the recording row. ON CONFLICT keeps the original started_at and
-    // accumulates totals.
+    // Create the parent recording if this is the first chunk we've seen for
+    // the session. Totals are NOT accumulated here - see the second update
+    // below, which only runs when the chunk was genuinely new.
     const recordingInsert = await db
       .insert(sessionRecordings)
       .values({
@@ -109,24 +129,19 @@ export async function POST(request: NextRequest) {
         distinctId: chunk.distinctId ?? undefined,
         startedAt: new Date(startTime),
         endedAt: new Date(endTime),
-        durationMs: endTime - startTime,
-        sizeBytes: uncompressedSize,
-        eventCount: chunk.events.length,
+        durationMs,
+        sizeBytes: 0,
+        eventCount: 0,
         startUrl: chunk.startUrl ?? undefined,
         browser: chunk.browser ?? undefined,
         os: chunk.os ?? undefined,
         deviceType: chunk.deviceType ?? undefined,
-        hasErrors: chunk.hasError ?? false,
+        hasErrors: false,
       })
       .onConflictDoUpdate({
         target: [sessionRecordings.projectId, sessionRecordings.sessionId],
-        set: {
-          endedAt: new Date(endTime),
-          durationMs: sql`GREATEST(${sessionRecordings.durationMs}, ${endTime} - EXTRACT(EPOCH FROM ${sessionRecordings.startedAt}) * 1000)::integer`,
-          sizeBytes: sql`${sessionRecordings.sizeBytes} + ${uncompressedSize}`,
-          eventCount: sql`${sessionRecordings.eventCount} + ${chunk.events.length}`,
-          hasErrors: sql`${sessionRecordings.hasErrors} OR ${chunk.hasError ?? false}`,
-        },
+        // No-op update purely so the statement RETURNs the existing row's id.
+        set: { sessionId: chunk.sessionId },
       })
       .returning({ id: sessionRecordings.id });
 
@@ -138,9 +153,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Insert the chunk. Duplicate (recording_id, chunk_index) is a no-op so
-    // retries from the SDK don't double-store.
-    await db
+    // Insert the chunk first. A duplicate (recording_id, chunk_index) returns
+    // no rows, which tells us this was a retry of an already-stored chunk.
+    const chunkInsert = await db
       .insert(sessionRecordingChunks)
       .values({
         recordingId,
@@ -151,10 +166,30 @@ export async function POST(request: NextRequest) {
         endTime,
         eventsCount: chunk.events.length,
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ id: sessionRecordingChunks.id });
+
+    const isNewChunk = chunkInsert.length > 0;
+
+    // Only roll the counters forward for genuinely new chunks. The SDK
+    // retries on pagehide via keepalive, so without this guard a normal
+    // retry inflates size_bytes and event_count on every resend (and pushes
+    // both integer columns toward overflow).
+    if (isNewChunk) {
+      await db
+        .update(sessionRecordings)
+        .set({
+          endedAt: new Date(endTime),
+          durationMs: sql`LEAST(GREATEST(${sessionRecordings.durationMs}, ${durationMs}), 2147483647)`,
+          sizeBytes: sql`${sessionRecordings.sizeBytes} + ${uncompressedSize}`,
+          eventCount: sql`${sessionRecordings.eventCount} + ${chunk.events.length}`,
+          hasErrors: sql`${sessionRecordings.hasErrors} OR ${chunk.hasError ?? false}`,
+        })
+        .where(eq(sessionRecordings.id, recordingId));
+    }
 
     return NextResponse.json(
-      { success: true, recordingId },
+      { success: true, recordingId, duplicate: !isNewChunk },
       { status: 200, headers: corsHeaders },
     );
   } catch (error) {

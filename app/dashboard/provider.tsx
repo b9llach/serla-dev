@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode } from 'react';
 import { Project } from '@/lib/db/schema';
 import { RealtimeProvider } from '@/lib/contexts/realtime-context';
 
@@ -39,17 +39,21 @@ export function DashboardProvider({
     initialProjectId || null
   );
 
-  // Sync state when server re-renders with new props (e.g. after project switch or creation)
-  const prevProjectId = useRef(initialProjectId);
-  const prevProjectsLen = useRef(initialProjects.length);
-  useEffect(() => {
-    if (initialProjectId !== prevProjectId.current || initialProjects.length !== prevProjectsLen.current) {
-      setCurrentProjectId(initialProjectId || null);
-      setProjects(initialProjects);
-      prevProjectId.current = initialProjectId;
-      prevProjectsLen.current = initialProjects.length;
-    }
-  }, [initialProjectId, initialProjects]);
+  // Sync state when the server re-renders with new props (project switch or
+  // creation). Adjusted during render with previous-value guards - React's
+  // documented pattern. Doing this in an effect costs an extra render pass
+  // and briefly paints stale data.
+  const [prevProjectId, setPrevProjectId] = useState(initialProjectId);
+  const [prevProjectsLen, setPrevProjectsLen] = useState(initialProjects.length);
+  if (
+    initialProjectId !== prevProjectId ||
+    initialProjects.length !== prevProjectsLen
+  ) {
+    setPrevProjectId(initialProjectId);
+    setPrevProjectsLen(initialProjects.length);
+    setCurrentProjectId(initialProjectId || null);
+    setProjects(initialProjects);
+  }
   const [realtimeToastsEnabled, setRealtimeToastsEnabled] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('serla:realtime-toasts');

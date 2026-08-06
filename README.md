@@ -127,13 +127,13 @@ Optional integrations (email, payments, realtime) are documented in [`.env.examp
 
 ### 3. Set up the database
 
-The schema lives in [`lib/db/schema.ts`](./lib/db/schema.ts). Apply it with the migration runner:
+The schema lives in [`lib/db/schema.ts`](./lib/db/schema.ts). Create every table with:
 
 ```bash
-node --env-file=.env.local scripts/apply-audit-migrations.mjs
+npm run db:setup
 ```
 
-This is idempotent (`CREATE TABLE IF NOT EXISTS` throughout), so it is safe to re-run. You can also use `drizzle-kit` directly — see [`drizzle.config.ts`](./drizzle.config.ts).
+This applies the base schema from [`drizzle/`](./drizzle) and then every incremental migration, and finally verifies all 27 expected tables exist. It is idempotent, so it is safe to re-run against an existing database.
 
 ### 4. Run
 

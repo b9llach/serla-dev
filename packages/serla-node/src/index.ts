@@ -52,7 +52,7 @@ export class Serla {
     }
 
     if (this.config.debug) {
-      // eslint-disable-next-line no-console
+       
       console.log('[serla] initialized', { host: this.config.host });
     }
   }
@@ -70,21 +70,21 @@ export class Serla {
   track(payload: TrackPayload): void {
     if (this.isShutdown) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] track() called after shutdown() - ignoring');
       }
       return;
     }
     if (!payload || !payload.name) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] track() requires a name');
       }
       return;
     }
     if (!payload.distinctId) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] track() requires a distinctId (server-side has no anonymous-id fallback)');
       }
       return;
@@ -106,7 +106,7 @@ export class Serla {
 
     this.queue.enqueue(event);
     if (this.config.debug) {
-      // eslint-disable-next-line no-console
+       
       console.log('[serla] track', payload.name, event);
     }
   }
@@ -119,14 +119,14 @@ export class Serla {
   async identify(distinctId: string, properties: EventProperties = {}): Promise<void> {
     if (this.isShutdown) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] identify() called after shutdown() - ignoring');
       }
       return;
     }
     if (!distinctId) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] identify() requires a distinctId');
       }
       return;
@@ -142,15 +142,15 @@ export class Serla {
         body: JSON.stringify({ distinctId, properties }),
       });
       if (!res.ok && this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn(`[serla] identify failed: HTTP ${res.status}`);
       } else if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.log('[serla] identify', distinctId, properties);
       }
     } catch (err) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] identify failed', err);
       }
     }
@@ -202,7 +202,7 @@ export class Serla {
       });
     } catch (err) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] trackLLM failed', err);
       }
     }
@@ -242,7 +242,7 @@ export class Serla {
       });
     } catch (e) {
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.warn('[serla] captureException failed', e);
       }
     }
@@ -279,7 +279,7 @@ export class Serla {
       this.queue.stop();
       this.detachBeforeExit();
       if (this.config.debug) {
-        // eslint-disable-next-line no-console
+         
         console.log('[serla] shutdown complete');
       }
     }

@@ -91,7 +91,7 @@ export class EventQueue {
         this.consecutiveFailures = 0;
         this.nextFlushAt = 0;
         if (this.config.debug) {
-          // eslint-disable-next-line no-console
+           
           console.log(`[serla] flushed ${batch.length} event(s)`);
         }
       } else {
@@ -112,7 +112,7 @@ export class EventQueue {
     const backoff = Math.min(1000 * Math.pow(2, this.consecutiveFailures - 1), 30_000);
     this.nextFlushAt = Date.now() + backoff;
     if (this.config.debug) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `[serla] flush failed (${reason instanceof Error ? reason.message : String(reason)}), retry in ${Math.round(backoff / 1000)}s`,
       );

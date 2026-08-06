@@ -14,10 +14,20 @@ export function PasswordChangeForm() {
   const [state, formAction, isPending] = useActionState(changePassword, undefined);
   const [newPassword, setNewPassword] = useState('');
 
+  // Clear the field (and with it the strength meter) once the server action
+  // reports success. Adjusted during render with a previous-value guard -
+  // React's documented alternative to calling setState inside an effect,
+  // which costs an extra render pass.
+  const [lastHandledState, setLastHandledState] = useState(state);
+  if (state !== lastHandledState) {
+    setLastHandledState(state);
+    if (state?.success) setNewPassword('');
+  }
+
+  // The toast is a genuine side effect, so it stays in an effect.
   useEffect(() => {
     if (state?.success) {
       toast.success('Password changed');
-      setNewPassword('');
     }
   }, [state]);
 

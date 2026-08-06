@@ -30,6 +30,7 @@ export async function OPTIONS() {
  * it's true/false.
  */
 export async function GET(request: NextRequest) {
+  try {
   const authHeader = request.headers.get('authorization');
   const { valid, project } = await validateApiKey(authHeader);
   if (!valid || !project) {
@@ -73,8 +74,16 @@ export async function GET(request: NextRequest) {
 
   const out: Record<string, boolean | string> = {};
   for (const flag of flags) {
-    const result = evaluateFlag(flag, { distinctId, properties });
-    out[flag.key] = result.value;
+    // One malformed flag must not take down flag resolution for the whole
+    // project - the SDK would see an opaque network error and fall back to
+    // defaults for every flag, not just the broken one.
+    try {
+      const result = evaluateFlag(flag, { distinctId, properties });
+      out[flag.key] = result.value;
+    } catch (err) {
+      console.error(`[flags] evaluation failed for "${flag.key}":`, err);
+      out[flag.key] = false;
+    }
   }
 
   return NextResponse.json(
@@ -85,8 +94,25 @@ export async function GET(request: NextRequest) {
         ...corsHeaders,
         // Cache lightly so client SDKs can debounce - 30s is short enough that
         // newly-toggled flags propagate fast.
-        'Cache-Control': 'public, max-age=30, stale-while-revalidate=30',
+        //
+        // MUST be `private`: this response is scoped to the caller's project
+        // via the Authorization header, but that header is not part of any
+        // shared cache's key. With `public`, a proxy (nginx/Varnish/CDN) is
+        // permitted to serve one tenant's flags to another - and since
+        // distinct_id defaults to empty, the URL is byte-identical across
+        // tenants. Vary on Authorization as a second line of defence.
+        'Cache-Control': 'private, max-age=30',
+        Vary: 'Authorization',
       },
     },
   );
+  } catch (error) {
+    console.error('[flags] Resolution error:', error);
+    // Return CORS headers even on failure - a bare Next.js 500 has none, so
+    // browser SDKs would see an opaque CORS error instead of a real status.
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500, headers: corsHeaders },
+    );
+  }
 }
