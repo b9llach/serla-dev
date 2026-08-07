@@ -1,14 +1,17 @@
 /**
  * LLM cost computation.
  *
- * Prices come from `model-prices.json`, a snapshot of LiteLLM's
- * community-maintained price map (~3500 models across every major provider).
- * Regenerate with `npm run pricing:sync`.
+ * Prices come from `model-prices.json`, a snapshot merged from LiteLLM (the
+ * canonical provider-native price map) and the OpenRouter catalog (which
+ * adds hundreds of aggregator/community models and usually lists brand-new
+ * releases first). ~4000 models. Regenerate with `npm run pricing:sync`.
  *
  * Why a snapshot rather than a live fetch: cost computation runs on the
  * ingest hot path, so it must not depend on a third-party host being up.
  *
- * Values in the JSON are USD per 1M tokens as `[input, output]`.
+ * Values in the JSON are USD per 1M tokens as `[input, output]`. An output
+ * price of 0 is meaningful - embeddings and rerankers only charge for input,
+ * and some catalog models are genuinely free.
  */
 
 import priceData from './model-prices.json';
