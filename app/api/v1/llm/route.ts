@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, llmGenerations, users } from '@/lib/db';
-import { validateApiKey } from '@/lib/api/auth';
+import { validateApiKeyWithLimits } from '@/lib/api/auth';
 import { canAccess } from '@/lib/plans/features';
 import { rateLimit, rateLimits, rateLimitResponse } from '@/lib/api/rate-limit';
 import { computeCost } from '@/lib/llm/pricing';
@@ -41,7 +41,7 @@ export async function OPTIONS() {
 export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization');
-    const { valid, project } = await validateApiKey(authHeader);
+    const { valid, project, withinLimits, limitError } = await validateApiKeyWithLimits(authHeader);
     if (!valid || !project) {
       return NextResponse.json(
         { error: 'Invalid API key' },
@@ -65,6 +65,16 @@ export async function POST(request: NextRequest) {
       return rateLimitResponse(rateLimitResult);
     }
 
+    // Monthly plan volume applies to these writes too - otherwise replay
+    // blobs, error events and LLM rows are an uncapped storage cost on
+    // every tier while only /events counts toward the quota.
+    if (!withinLimits) {
+      return NextResponse.json(
+        { error: 'Monthly limit exceeded', message: limitError },
+        { status: 429, headers: corsHeaders },
+      );
+    }
+
     let body: unknown;
     try {
       body = await request.json();
@@ -83,6 +93,24 @@ export async function POST(request: NextRequest) {
       );
     }
     const gen = parsed.data;
+
+    // Cap the prompt/completion payload. `input` and `output` are free-form
+    // JSON, so without a limit a single request can push an arbitrarily large
+    // jsonb value into the table. Vercel's 4.5MB body cap masks this on one
+    // deployment target; self-hosted Node has no such ceiling.
+    const MAX_IO_BYTES = 256 * 1024;
+    const ioBytes =
+      Buffer.byteLength(JSON.stringify(gen.input ?? null), 'utf-8') +
+      Buffer.byteLength(JSON.stringify(gen.output ?? null), 'utf-8');
+    if (ioBytes > MAX_IO_BYTES) {
+      return NextResponse.json(
+        {
+          error: 'Payload too large',
+          message: `input + output must be under ${MAX_IO_BYTES / 1024}KB (got ${Math.round(ioBytes / 1024)}KB). Truncate the prompt or store it in your own system and send a reference in metadata.`,
+        },
+        { status: 413, headers: corsHeaders },
+      );
+    }
 
     // Backfill cost if the SDK didn't compute one and we have token counts.
     let costUsd = gen.costUsd ?? null;

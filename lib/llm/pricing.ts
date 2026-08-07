@@ -1,57 +1,100 @@
 /**
- * LLM pricing table - dollars per 1M tokens, separated by input vs output.
+ * LLM cost computation.
  *
- * Used to backfill cost when the SDK didn't provide one. Best-effort - we'd
- * rather show $0 than reject an ingest call because a new model isn't in the
- * table. Update as providers publish new SKUs.
+ * Prices come from `model-prices.json`, a snapshot of LiteLLM's
+ * community-maintained price map (~3500 models across every major provider).
+ * Regenerate with `npm run pricing:sync`.
+ *
+ * Why a snapshot rather than a live fetch: cost computation runs on the
+ * ingest hot path, so it must not depend on a third-party host being up.
+ *
+ * Values in the JSON are USD per 1M tokens as `[input, output]`.
  */
+
+import priceData from './model-prices.json';
+
+type PriceTuple = [input: number, output: number];
+
+const PRICES = priceData.prices as unknown as Record<string, PriceTuple>;
+
 export interface ModelPrice {
-  input: number; // USD per 1M input tokens
-  output: number; // USD per 1M output tokens
+  /** USD per 1M input tokens. */
+  input: number;
+  /** USD per 1M output tokens. */
+  output: number;
 }
 
-const PRICING: Record<string, ModelPrice> = {
-  // Anthropic
-  'claude-opus-4-7': { input: 15, output: 75 },
-  'claude-opus-4-6': { input: 15, output: 75 },
-  'claude-opus-4-5': { input: 15, output: 75 },
-  'claude-sonnet-4-6': { input: 3, output: 15 },
-  'claude-sonnet-4-5': { input: 3, output: 15 },
-  'claude-haiku-4-5': { input: 1, output: 5 },
+/**
+ * Resolve a model name to its price, tolerating the naming variations
+ * providers and SDKs actually emit:
+ *
+ *   "gpt-4o"                        exact
+ *   "openai/gpt-4o"                 provider-prefixed (OpenRouter, LiteLLM)
+ *   "anthropic:claude-sonnet-4-5"   colon-separated prefix
+ *   "gpt-4o-2024-11-20"             dated snapshot
+ *   "GPT-4o"                        wrong case
+ *
+ * Returns null when the model is genuinely unknown, so callers can surface
+ * "unpriced" instead of silently reporting $0.
+ */
+export function lookupModelPrice(model: string): ModelPrice | null {
+  if (!model) return null;
 
-  // OpenAI
-  'gpt-4o': { input: 2.5, output: 10 },
-  'gpt-4o-mini': { input: 0.15, output: 0.6 },
-  'gpt-4-turbo': { input: 10, output: 30 },
-  'gpt-3.5-turbo': { input: 0.5, output: 1.5 },
-  'o1': { input: 15, output: 60 },
-  'o1-mini': { input: 3, output: 12 },
+  const candidates: string[] = [];
+  const push = (s: string) => {
+    if (s && !candidates.includes(s)) candidates.push(s);
+  };
 
-  // Google
-  'gemini-2.5-pro': { input: 1.25, output: 5 },
-  'gemini-2.5-flash': { input: 0.075, output: 0.3 },
+  const raw = model.trim();
+  push(raw);
+  push(raw.toLowerCase());
 
-  // Mistral
-  'mistral-large': { input: 2, output: 6 },
-  'mistral-small': { input: 0.2, output: 0.6 },
-};
+  // Strip a provider prefix: "openai/gpt-4o" or "anthropic:claude-...".
+  const afterSlash = raw.includes('/') ? raw.slice(raw.lastIndexOf('/') + 1) : '';
+  const afterColon = raw.includes(':') ? raw.slice(raw.lastIndexOf(':') + 1) : '';
+  push(afterSlash);
+  push(afterSlash.toLowerCase());
+  push(afterColon);
+  push(afterColon.toLowerCase());
+
+  // Strip a trailing dated snapshot: -2024-11-20 or -20241120.
+  for (const base of [raw, afterSlash, afterColon].filter(Boolean)) {
+    push(base.replace(/-\d{4}-\d{2}-\d{2}$/, ''));
+    push(base.replace(/-\d{8}$/, ''));
+    push(base.replace(/-\d{4}-\d{2}-\d{2}$/, '').toLowerCase());
+    push(base.replace(/-\d{8}$/, '').toLowerCase());
+    // "-latest" aliases.
+    push(base.replace(/-latest$/, ''));
+    push(base.replace(/-latest$/, '').toLowerCase());
+  }
+
+  for (const c of candidates) {
+    const hit = PRICES[c];
+    if (hit) return { input: hit[0], output: hit[1] };
+  }
+  return null;
+}
+
+/** True when we have pricing for this model. */
+export function isModelPriced(model: string): boolean {
+  return lookupModelPrice(model) !== null;
+}
 
 /**
- * Compute cost in USD for a generation. Returns null if model is unknown or
- * token counts are missing.
+ * Compute cost in USD for a generation. Returns null when the model is
+ * unknown or token counts are missing - the caller stores NULL rather than
+ * 0 so unpriced generations are distinguishable from genuinely free ones.
  */
 export function computeCost(
   model: string,
   inputTokens: number | null | undefined,
   outputTokens: number | null | undefined,
 ): number | null {
-  if (!model || inputTokens == null || outputTokens == null) return null;
-  // Try exact model first, then strip dated suffix.
-  let price = PRICING[model];
-  if (!price) {
-    const stripped = model.replace(/-\d{8}$/, '').replace(/-\d{4}-\d{2}-\d{2}$/, '');
-    price = PRICING[stripped];
-  }
+  if (inputTokens == null || outputTokens == null) return null;
+  const price = lookupModelPrice(model);
   if (!price) return null;
   return (inputTokens * price.input + outputTokens * price.output) / 1_000_000;
 }
+
+/** Number of models in the bundled price table - surfaced in the dashboard. */
+export const PRICED_MODEL_COUNT = Object.keys(PRICES).length;

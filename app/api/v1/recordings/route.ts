@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { gzipSync } from 'zlib';
 import { db, sessionRecordings, sessionRecordingChunks, users } from '@/lib/db';
-import { validateApiKey } from '@/lib/api/auth';
+import { validateApiKeyWithLimits } from '@/lib/api/auth';
 import { canAccess } from '@/lib/plans/features';
 import { rateLimit, rateLimits, rateLimitResponse } from '@/lib/api/rate-limit';
 import { z } from 'zod';
@@ -41,7 +41,7 @@ export async function OPTIONS() {
 export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization');
-    const { valid, project } = await validateApiKey(authHeader);
+    const { valid, project, withinLimits, limitError } = await validateApiKeyWithLimits(authHeader);
     if (!valid || !project) {
       return NextResponse.json(
         { error: 'Invalid API key' },
@@ -64,6 +64,16 @@ export async function POST(request: NextRequest) {
     const rateLimitResult = await rateLimit(`recordings:${project.id}`, rateLimits.events);
     if (!rateLimitResult.success) {
       return rateLimitResponse(rateLimitResult);
+    }
+
+    // Monthly plan volume applies to these writes too - otherwise replay
+    // blobs, error events and LLM rows are an uncapped storage cost on
+    // every tier while only /events counts toward the quota.
+    if (!withinLimits) {
+      return NextResponse.json(
+        { error: 'Monthly limit exceeded', message: limitError },
+        { status: 429, headers: corsHeaders },
+      );
     }
 
     let body: unknown;
@@ -150,6 +160,35 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Failed to upsert recording' },
         { status: 500, headers: corsHeaders },
+      );
+    }
+
+    // Cap total recording size. The per-chunk limit above bounds one request,
+    // but nothing bounded a session's total until now - a multi-hour tab (or
+    // a scripted client) could grow a recording without limit, and playback
+    // decompresses the whole thing into memory at once. size_bytes and
+    // event_count are also integer columns that overflow near 2.1B.
+    const MAX_RECORDING_BYTES = 200 * 1024 * 1024; // 200MB uncompressed
+    const MAX_RECORDING_EVENTS = 500_000;
+    const [totals] = await db
+      .select({ sizeBytes: sessionRecordings.sizeBytes, eventCount: sessionRecordings.eventCount })
+      .from(sessionRecordings)
+      .where(eq(sessionRecordings.id, recordingId))
+      .limit(1);
+    if (
+      totals &&
+      (totals.sizeBytes + uncompressedSize > MAX_RECORDING_BYTES ||
+        totals.eventCount + chunk.events.length > MAX_RECORDING_EVENTS)
+    ) {
+      // Accept the request so the SDK doesn't retry forever, but stop storing.
+      return NextResponse.json(
+        {
+          success: true,
+          recordingId,
+          truncated: true,
+          message: 'Recording reached its size limit; further chunks are ignored.',
+        },
+        { status: 200, headers: corsHeaders },
       );
     }
 

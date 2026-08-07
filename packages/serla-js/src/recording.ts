@@ -123,7 +123,10 @@ export class SessionRecorder {
     if (this.buffer.length === 0 || !this.currentSessionId) return;
     const events = this.buffer;
     const hasError = this.hasErrorThisChunk;
-    const chunkIndex = this.chunkIndex++;
+    // Read the index without consuming it. Advancing before a confirmed
+    // write would burn the slot on failure, leaving a permanent hole that
+    // playback stitches over silently.
+    const chunkIndex = this.chunkIndex;
     this.buffer = [];
     this.bufferBytes = 0;
     this.hasErrorThisChunk = false;
@@ -144,7 +147,7 @@ export class SessionRecorder {
     });
 
     try {
-      await fetch(`${this.config.host}/api/v1/recordings`, {
+      const res = await fetch(`${this.config.host}/api/v1/recordings`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -153,8 +156,47 @@ export class SessionRecorder {
         body,
         keepalive,
       });
+
+      if (res.ok) {
+        // Only now is the chunk durably stored - claim the index.
+        this.chunkIndex++;
+        return;
+      }
+
+      // 4xx other than 429 means this chunk will never be accepted (bad key,
+      // plan doesn't include replay, payload too large). Drop it and move on
+      // rather than retrying forever.
+      const permanent = res.status >= 400 && res.status < 500 && res.status !== 429;
+      if (permanent) {
+        this.chunkIndex++;
+        if (this.config.debug) {
+          console.warn(`[serla] recording chunk rejected (HTTP ${res.status}) - dropping`);
+        }
+        return;
+      }
+      this.requeue(events, hasError);
+      if (this.config.debug) {
+        console.warn(`[serla] recording flush failed (HTTP ${res.status}) - will retry`);
+      }
     } catch (err) {
+      this.requeue(events, hasError);
       if (this.config.debug) console.warn('[serla] recording flush failed', err);
+    }
+  }
+
+  /**
+   * Put a failed batch back at the front of the buffer so the next flush
+   * retries it under the same chunk index. Bounded so a persistently broken
+   * endpoint can't grow the buffer without limit in a long-lived tab.
+   */
+  private requeue(events: RrwebEvent[], hadError: boolean): void {
+    const MAX_BUFFERED = 5000;
+    if (this.buffer.length + events.length <= MAX_BUFFERED) {
+      this.buffer = events.concat(this.buffer);
+      this.bufferBytes += events.reduce((n, e) => n + approximateSize(e), 0);
+      this.hasErrorThisChunk = this.hasErrorThisChunk || hadError;
+    } else if (this.config.debug) {
+      console.warn('[serla] recording buffer full - dropping oldest batch');
     }
   }
 

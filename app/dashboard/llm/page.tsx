@@ -71,6 +71,10 @@ export default async function LLMPage({ searchParams }: PageProps) {
       totalTokens: sql<number>`coalesce(sum(${llmGenerations.totalTokens}), 0)`,
       avgLatency: sql<number>`coalesce(avg(${llmGenerations.latencyMs}), 0)`,
       errorCount: sql<number>`count(*) filter (where ${llmGenerations.status} = 'error')`,
+      // Generations we couldn't price: tokens were reported but the model
+      // isn't in the price table. Without surfacing this, the cost total
+      // silently under-reports and looks authoritative.
+      unpricedCount: sql<number>`count(*) filter (where ${llmGenerations.costUsd} is null and ${llmGenerations.totalTokens} is not null)`,
     })
     .from(llmGenerations)
     .where(
@@ -175,6 +179,20 @@ export default async function LLMPage({ searchParams }: PageProps) {
                   <AlertCircle className="h-4 w-4 text-red-400" />
                   <span className="text-red-300">
                     {Number(agg.errorCount).toLocaleString()} failed calls in this window
+                  </span>
+                </div>
+              )}
+
+              {Number(agg.unpricedCount) > 0 && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 flex items-start gap-2 text-sm">
+                  <AlertCircle className="h-4 w-4 text-amber-400 shrink-0 mt-0.5" />
+                  <span className="text-amber-200">
+                    {Number(agg.unpricedCount).toLocaleString()} generations aren&apos;t priced, so
+                    the cost above is an underestimate. Their model isn&apos;t in the price table —
+                    pass <code className="bg-zinc-800 px-1 rounded text-xs">costUsd</code> explicitly
+                    when tracking, or run{' '}
+                    <code className="bg-zinc-800 px-1 rounded text-xs">npm run pricing:sync</code> to
+                    pick up newer models.
                   </span>
                 </div>
               )}

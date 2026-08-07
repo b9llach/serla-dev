@@ -244,12 +244,27 @@ export const rateLimits = {
   passwordReset: { limit: 5, windowMs: 60 * 60 * 1000 },
 };
 
-// Helper to create rate limit response
-export function rateLimitResponse(result: RateLimitResult): Response {
+/**
+ * Build a 429 response.
+ *
+ * CORS headers are included by default because every caller of this helper is
+ * a public v1 endpoint that browser SDKs hit cross-origin. Without them the
+ * browser reports an opaque CORS failure instead of a readable 429, so the
+ * SDK can't see the status or honour Retry-After - it just drops the payload.
+ */
+export function rateLimitResponse(
+  result: RateLimitResult,
+  extraHeaders: Record<string, string> = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Idempotency-Key',
+  }
+): Response {
+  const retryAfter = Math.max(0, Math.ceil((result.reset - Date.now()) / 1000));
   return new Response(
     JSON.stringify({
       error: 'Too many requests',
-      retryAfter: Math.ceil((result.reset - Date.now()) / 1000),
+      retryAfter,
     }),
     {
       status: 429,
@@ -258,7 +273,8 @@ export function rateLimitResponse(result: RateLimitResult): Response {
         'X-RateLimit-Limit': result.limit.toString(),
         'X-RateLimit-Remaining': result.remaining.toString(),
         'X-RateLimit-Reset': result.reset.toString(),
-        'Retry-After': Math.ceil((result.reset - Date.now()) / 1000).toString(),
+        'Retry-After': retryAfter.toString(),
+        ...extraHeaders,
       },
     }
   );

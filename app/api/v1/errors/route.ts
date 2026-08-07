@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db, errorGroups, errorEvents, users } from '@/lib/db';
-import { validateApiKey } from '@/lib/api/auth';
+import { validateApiKeyWithLimits } from '@/lib/api/auth';
 import { canAccess } from '@/lib/plans/features';
 import { rateLimit, rateLimits, rateLimitResponse } from '@/lib/api/rate-limit';
 import { computeFingerprint, parseTopFrame } from '@/lib/errors/fingerprint';
@@ -37,7 +37,7 @@ export async function OPTIONS() {
 export async function POST(request: NextRequest) {
   try {
     const authHeader = request.headers.get('authorization');
-    const { valid, project } = await validateApiKey(authHeader);
+    const { valid, project, withinLimits, limitError } = await validateApiKeyWithLimits(authHeader);
     if (!valid || !project) {
       return NextResponse.json(
         { error: 'Invalid API key' },
@@ -59,6 +59,16 @@ export async function POST(request: NextRequest) {
     const rateLimitResult = await rateLimit(`errors:${project.id}`, rateLimits.events);
     if (!rateLimitResult.success) {
       return rateLimitResponse(rateLimitResult);
+    }
+
+    // Monthly plan volume applies to these writes too - otherwise replay
+    // blobs, error events and LLM rows are an uncapped storage cost on
+    // every tier while only /events counts toward the quota.
+    if (!withinLimits) {
+      return NextResponse.json(
+        { error: 'Monthly limit exceeded', message: limitError },
+        { status: 429, headers: corsHeaders },
+      );
     }
 
     let body: unknown;
@@ -102,7 +112,10 @@ export async function POST(request: NextRequest) {
         firstSeenAt: timestamp,
         lastSeenAt: timestamp,
         occurrenceCount: 1,
-        affectedUsers: err.distinctId ? 1 : 0,
+        // Seeded at 0 on purpose: the increment below runs for this first
+        // event too (nothing else in the group shares its distinct_id yet).
+        // Seeding 1 here would double-count the very first occurrence.
+        affectedUsers: 0,
         release: err.release ?? undefined,
         environment: err.environment ?? undefined,
       })
@@ -126,7 +139,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    await db.insert(errorEvents).values({
+    const insertedEvent = await db.insert(errorEvents).values({
       groupId,
       projectId: project.id,
       distinctId: err.distinctId ?? undefined,
@@ -146,18 +159,31 @@ export async function POST(request: NextRequest) {
       level: err.level ?? 'error',
       metadata: (err.metadata ?? {}) as Record<string, unknown>,
       timestamp,
-    });
+    }).returning({ id: errorEvents.id });
 
-    // Recompute affected_users for this group. Cheap because grouped events
-    // are normally bounded; if it gets expensive, move to a daily cron job.
+    const insertedEventId = insertedEvent[0]?.id;
+
+    // affected_users is recomputed by the daily cron, not here.
+    //
+    // The previous implementation ran COUNT(DISTINCT distinct_id) across the
+    // whole group on every single ingested error. distinct_id isn't in the
+    // group index, so each occurrence forced a heap scan of every prior
+    // occurrence - meaning the noisiest error was also the most expensive to
+    // record, and ingest latency degraded exactly when a customer was on
+    // fire. Incrementing on first sight of a distinct_id keeps the common
+    // case O(1); the cron corrects any drift.
     if (err.distinctId) {
       await db.execute(sql`
         UPDATE error_groups
-        SET affected_users = (
-          SELECT count(DISTINCT distinct_id) FROM error_events
-          WHERE group_id = ${groupId} AND distinct_id IS NOT NULL
-        )
+        SET affected_users = affected_users + 1
         WHERE id = ${groupId}
+          AND NOT EXISTS (
+            SELECT 1 FROM error_events
+            WHERE group_id = ${groupId}
+              AND distinct_id = ${err.distinctId}
+              AND id <> ${insertedEventId}
+            LIMIT 1
+          )
       `);
     }
 

@@ -37,6 +37,7 @@ async function runDailyCron() {
     webhooks: { success: false, processed: 0, successCount: 0, failCount: 0 },
     alerts: { success: false, evaluated: 0, fired: 0 },
     digest: { success: false, sent: 0 },
+    errorGroupsReconciled: { success: false, updated: 0 },
   };
 
   // 1. CLEANUP - Delete old data based on retention settings
@@ -146,6 +147,37 @@ async function runDailyCron() {
     console.log(`Cleanup complete: ${totalEventsDeleted} events, ${totalSessionsDeleted} sessions, ${totalTokensDeleted} tokens deleted`);
   } catch (error) {
     console.error('Cleanup error:', error);
+  }
+
+  // 1b. RECONCILE error_groups.affected_users
+  //
+  // Ingest increments this optimistically (O(1) per occurrence) instead of
+  // running COUNT(DISTINCT) over the whole group on every error, which made
+  // the noisiest error the most expensive to record. That increment can drift
+  // - concurrent first-sightings of the same distinct_id can both increment,
+  // and retention cleanup deletes occurrences without adjusting the counter.
+  // Recompute exactly once a day for groups that saw activity recently.
+  try {
+    const activeSince = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const reconciled = await db.execute(sql`
+      UPDATE error_groups g
+      SET affected_users = COALESCE(sub.n, 0)
+      FROM (
+        SELECT group_id, COUNT(DISTINCT distinct_id) AS n
+        FROM error_events
+        WHERE distinct_id IS NOT NULL
+        GROUP BY group_id
+      ) sub
+      WHERE g.id = sub.group_id
+        AND g.last_seen_at >= ${activeSince}
+        AND g.affected_users IS DISTINCT FROM sub.n
+    `);
+    const rowCount = (reconciled as unknown as { rowCount?: number }).rowCount ?? 0;
+    results.errorGroupsReconciled = { success: true, updated: rowCount };
+    console.log(`Error group reconciliation: corrected ${rowCount} affected_users counts`);
+  } catch (error) {
+    console.error('Error group reconciliation failed:', error);
+    results.errorGroupsReconciled = { success: false, updated: 0 };
   }
 
   // 2. AGGREGATE - Generate daily metrics for yesterday
